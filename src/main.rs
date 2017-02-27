@@ -227,23 +227,21 @@ impl<'a> State<'a> {
     }
 
     fn output(&self) -> String {
-        let mut used_cached_servers = 0;
-        let mut buffer = String::new();
+        let mut buffer = self.input.caches.len().to_string();
+        buffer.push_str("\n");
 
         for (cache_id, videos) in self.cached_videos.iter().enumerate() {
-            if videos.len() > 0 {
-                used_cached_servers += 1;
-                buffer.push_str("\n");
-                buffer.push_str(cache_id.to_string().as_str());
+            buffer.push_str(cache_id.to_string().as_str());
 
-                for video_id in videos {
-                    buffer.push(' ');
-                    buffer.push_str(video_id.to_string().as_str());
-                }
+            for video_id in videos {
+                buffer.push(' ');
+                buffer.push_str(video_id.to_string().as_str());
             }
+
+            buffer.push_str("\n");
         }
 
-        format!("{}{}", used_cached_servers, buffer)
+        buffer
     }
 }
 
@@ -302,5 +300,5 @@ fn main() {
              Instant::now().duration_since(now).as_secs(),
              state.score())
         .unwrap();
-    println!("{}", state.output())
+    print!("{}", state.output())
 }
