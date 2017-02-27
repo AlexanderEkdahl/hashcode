@@ -17,19 +17,20 @@ type Id = usize;
 
 #[derive(Debug)]
 struct Video {
-    id: Id,
     size: u32,
 }
 
 #[derive(Debug)]
 struct Endpoint {
-    id: Id,
     latency: u32,
     cache_connections: Vec<(Id, u32)>,
+    request_descriptions: Vec<Id>,
 }
 
 #[derive(Debug)]
-struct Cache {}
+struct Cache {
+    endpoint_connections: Vec<(Id, u32)>,
+}
 
 #[derive(Debug, Clone)]
 struct RequestDescription {
@@ -81,7 +82,7 @@ fn parse_input<P>(filename: P, debug: bool) -> Input
     }
 
     for _id in 0..number_of_caches {
-        caches.push(Cache {})
+        caches.push(Cache { endpoint_connections: Vec::new() });
     }
 
     {
@@ -92,15 +93,12 @@ fn parse_input<P>(filename: P, debug: bool) -> Input
             if debug {
                 println!("Video #{}: {}MB", id, size);
             }
-            videos.push(Video {
-                id: id,
-                size: size,
-            });
+            videos.push(Video { size: size });
         }
     }
 
     {
-        for id in 0..number_of_endpoints {
+        for endpoint_id in 0..number_of_endpoints {
             let line = lines.next().unwrap().unwrap();
             let latency: u32;
             let number_of_caches: usize;
@@ -113,7 +111,7 @@ fn parse_input<P>(filename: P, debug: bool) -> Input
                 if debug {
                     println!("Endpoint {} has {}ms datacenter latency and is connected to {} \
                               caches:",
-                             id,
+                             endpoint_id,
                              latency,
                              number_of_caches);
                 }
@@ -125,22 +123,23 @@ fn parse_input<P>(filename: P, debug: bool) -> Input
                 let cache_id: usize = parts.next().unwrap().parse().unwrap();
                 let cache_latency: u32 = parts.next().unwrap().parse().unwrap();
                 cache_connections.push((cache_id, cache_latency));
+                caches[cache_id].endpoint_connections.push((endpoint_id, cache_latency));
                 if debug {
-                    println!{"The latency (of endpoint {}) to cache {} is {}ms.", id, cache_id, cache_latency};
+                    println!{"The latency (of endpoint {}) to cache {} is {}ms.", endpoint_id, cache_id, cache_latency};
                 }
             }
 
             cache_connections.sort_by(|a, b| a.1.cmp(&b.1));
 
             endpoints.push(Endpoint {
-                id: id,
                 latency: latency,
                 cache_connections: cache_connections,
+                request_descriptions: Vec::new(),
             });
         }
     }
 
-    for line in lines {
+    for (request_description_id, line) in lines.enumerate() {
         let mut parts = line.as_ref().unwrap().split_whitespace();
         let video_id: usize = parts.next().unwrap().parse().unwrap();
         let endpoint_id: usize = parts.next().unwrap().parse().unwrap();
@@ -152,6 +151,7 @@ fn parse_input<P>(filename: P, debug: bool) -> Input
                      endpoint_id);
         }
 
+        endpoints[endpoint_id].request_descriptions.push(request_description_id);
         request_descriptions.push(RequestDescription {
             amount: amount,
             video_id: video_id,
@@ -253,22 +253,43 @@ fn greedy_next(state: &State) -> Option<(u32, (Id, Id))> {
             let ref endpoint = state.input.endpoints[request_description.endpoint_id];
             let ref video = state.input.videos[request_description.video_id];
 
-            if let Some(&(cache_id, cache_latency)) =
+            if let Some(&(cache_id, _)) =
                 {
-                    if state.is_caching(request_description.endpoint_id,
-                                        request_description.video_id) {
-                        return None;
-                    }
+                    // if state.is_caching(request_description.endpoint_id,
+                    //                     request_description.video_id) {
+                    //     return None; // remove return
+                    // }
 
                     endpoint.cache_connections
                         .iter()
                         .find(|&&(cache_id, _)| {
-                            state.input.cache_size as i32 - state.cache_usage(cache_id) as i32 >
+                            state.input.cache_size as i32 - state.cache_usage(cache_id) as i32 >=
                             video.size as i32
                         })
                 } {
-                Some(((endpoint.latency - cache_latency) * request_description.amount,
-                      (request_description.video_id, cache_id)))
+                // Iterate all endpoints for this cache and their respective request descriptions
+                // The endpoint may however already be caching the video which makes the gain for
+                // that endpoint zero.
+                Some((state.input.caches[cache_id].endpoint_connections.iter().filter_map(|&(endpoint_id, cache_latency)| {
+                    if state.is_caching(endpoint_id,
+                                        request_description.video_id) {
+                        None
+                    } else {
+                        let ref endpoint = state.input.endpoints[endpoint_id];
+
+                        // can there be multiple request description for the same video for the same endpoint?
+                        if let Some(&request_description_id) = {
+                            endpoint.request_descriptions.iter().find(|&&request_description_id| {
+                                state.input.request_descriptions[request_description_id].video_id == request_description.video_id
+                        })
+                        } {
+                            Some((endpoint.latency - cache_latency) * state.input.request_descriptions[request_description_id].amount)
+                        } else {
+                            None // Should never happen as this means none of the requests contained the video,
+                                 // not ever the requests description itself.
+                        }
+                    }
+                }).sum(), (request_description.video_id, cache_id)))
             } else {
                 None
             }
