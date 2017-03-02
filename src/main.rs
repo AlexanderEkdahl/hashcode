@@ -273,11 +273,13 @@ fn greedy_next(state: &State) -> Option<(u32, (Id, Id))> {
                 Some((state.input.caches[cache_id].endpoint_connections.iter().filter_map(|&(endpoint_id, cache_latency)| {
                     if state.is_caching(endpoint_id,
                                         request_description.video_id) {
+                        // The video is already cached at this endpoint. The only improvements that can be made is if cache latency
+                        // is considerable lower.
                         None
                     } else {
                         let ref endpoint = state.input.endpoints[endpoint_id];
 
-                        // can there be multiple request description for the same video for the same endpoint?
+                        // TODO: Several request descriptors for the same movie. These should be clumped together when parsing
                         if let Some(&request_description_id) = {
                             endpoint.request_descriptions.iter().find(|&&request_description_id| {
                                 state.input.request_descriptions[request_description_id].video_id == request_description.video_id
@@ -285,8 +287,8 @@ fn greedy_next(state: &State) -> Option<(u32, (Id, Id))> {
                         } {
                             Some((endpoint.latency - cache_latency) * state.input.request_descriptions[request_description_id].amount)
                         } else {
-                            None // Should never happen as this means none of the requests contained the video,
-                                 // not ever the requests description itself.
+                            // The video is not requested by this endpoint. No latency improvements can be made using this cache.
+                            None
                         }
                     }
                 }).sum(), (request_description.video_id, cache_id)))
