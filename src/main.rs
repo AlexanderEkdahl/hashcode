@@ -17,13 +17,11 @@ type Id = usize;
 
 #[derive(Debug)]
 struct Video {
-    id: Id,
     size: u32,
 }
 
 #[derive(Debug)]
 struct Endpoint {
-    id: Id,
     latency: u32,
     cache_connections: Vec<(Id, u32)>,
 }
@@ -92,15 +90,12 @@ fn parse_input<P>(filename: P, debug: bool) -> Input
             if debug {
                 println!("Video #{}: {}MB", id, size);
             }
-            videos.push(Video {
-                id: id,
-                size: size,
-            });
+            videos.push(Video { size: size });
         }
     }
 
     {
-        for id in 0..number_of_endpoints {
+        for endpoint_id in 0..number_of_endpoints {
             let line = lines.next().unwrap().unwrap();
             let latency: u32;
             let number_of_caches: usize;
@@ -113,7 +108,7 @@ fn parse_input<P>(filename: P, debug: bool) -> Input
                 if debug {
                     println!("Endpoint {} has {}ms datacenter latency and is connected to {} \
                               caches:",
-                             id,
+                             endpoint_id,
                              latency,
                              number_of_caches);
                 }
@@ -126,14 +121,13 @@ fn parse_input<P>(filename: P, debug: bool) -> Input
                 let cache_latency: u32 = parts.next().unwrap().parse().unwrap();
                 cache_connections.push((cache_id, cache_latency));
                 if debug {
-                    println!{"The latency (of endpoint {}) to cache {} is {}ms.", id, cache_id, cache_latency};
+                    println!{"The latency (of endpoint {}) to cache {} is {}ms.", endpoint_id, cache_id, cache_latency};
                 }
             }
 
             cache_connections.sort_by(|a, b| a.1.cmp(&b.1));
 
             endpoints.push(Endpoint {
-                id: id,
                 latency: latency,
                 cache_connections: cache_connections,
             });
@@ -263,7 +257,7 @@ fn greedy_next(state: &State) -> Option<(u32, (Id, Id))> {
                     endpoint.cache_connections
                         .iter()
                         .find(|&&(cache_id, _)| {
-                            state.input.cache_size as i32 - state.cache_usage(cache_id) as i32 >
+                            state.input.cache_size as i32 - state.cache_usage(cache_id) as i32 >=
                             video.size as i32
                         })
                 } {
