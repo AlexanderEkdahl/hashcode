@@ -10,6 +10,7 @@ use std::io::BufRead;
 use std::fs::File;
 use std::env;
 use std::collections::HashSet;
+use std::collections::HashMap;
 use rayon::prelude::*;
 use pbr::{ProgressBar, Units};
 
@@ -58,7 +59,7 @@ fn parse_input<P>(filename: P, debug: bool) -> Input
     let mut videos = Vec::new();
     let mut endpoints = Vec::new();
     let mut caches = Vec::new();
-    let mut request_descriptions = Vec::new();
+    let mut request_descriptions = HashMap::new();
 
     {
         let line = lines.next().unwrap().unwrap();
@@ -146,11 +147,14 @@ fn parse_input<P>(filename: P, debug: bool) -> Input
                      endpoint_id);
         }
 
-        request_descriptions.push(RequestDescription {
-            amount: amount,
-            video_id: video_id,
-            endpoint_id: endpoint_id,
-        });
+        // Remove duplicates of request descriptions that are requesting the same video from the same endpoint
+        let request_description = request_descriptions.entry((video_id, endpoint_id))
+            .or_insert(RequestDescription {
+                amount: 0,
+                video_id: video_id,
+                endpoint_id: endpoint_id,
+            });
+        (*request_description).amount += amount;
     }
 
     Input {
@@ -158,7 +162,9 @@ fn parse_input<P>(filename: P, debug: bool) -> Input
         endpoints: endpoints,
         caches: caches,
         cache_size: cache_size,
-        request_descriptions: request_descriptions,
+        request_descriptions: request_descriptions.iter()
+            .map(|(_, request_description)| request_description.clone())
+            .collect(),
     }
 }
 
@@ -194,16 +200,15 @@ impl<'a> State<'a> {
         self.cache_usage[cache_id] += self.input.videos[video_id].size;
     }
 
-    #[allow(dead_code)]
-    fn score(&self) -> u64 {
-        let mut sum_latency = 0;
-        let mut sum_requests = 0;
+    fn score(&self) -> (u64, u32) {
+        let mut sum_latency: u64 = 0;
+        let mut sum_requests: u64 = 0;
 
         for request_description in self.input.request_descriptions.iter() {
             let ref endpoint = self.input.endpoints[request_description.endpoint_id];
             let mut latency = None;
 
-            sum_requests += request_description.amount;
+            sum_requests += request_description.amount as u64;
 
             for &(cache_id, cache_latency) in endpoint.cache_connections.iter() {
                 if self.cached_videos[cache_id].contains(&request_description.video_id) {
@@ -213,11 +218,11 @@ impl<'a> State<'a> {
             }
 
             if let Some(latency) = latency {
-                sum_latency += (endpoint.latency - latency) * request_description.amount;
+                sum_latency += ((endpoint.latency - latency) * request_description.amount) as u64;
             }
         }
 
-        ((sum_latency as f64 / sum_requests as f64) * 1000.0).floor() as u64
+        (sum_latency, ((sum_latency as f64 / sum_requests as f64) * 1000.0).floor() as u32)
     }
 
     fn output(&self) -> String {
@@ -270,6 +275,7 @@ fn greedy_next(state: &State) -> Option<(u32, (Id, Id))> {
         .max_by_key(|x| x.0)
 }
 
+#[allow(dead_code)]
 fn greedy<T: Write>(state: &mut State, pb: &mut ProgressBar<T>) {
     while let Some((_, (video_id, cache_id))) = greedy_next(state) {
         state.insert_video_in_cache(cache_id, video_id);
@@ -287,12 +293,64 @@ fn main() {
     pb.set_units(Units::Bytes);
     let now = Instant::now();
 
-    greedy(&mut state, &mut pb);
+    // Calculate the latency savings of putting any of the requested videos in any of the eligable caches
+    let request_description_scores: Vec<Vec<(Id, Id, u32)>> = input.request_descriptions
+        .par_iter()
+        .map(|request_description| {
+            let ref endpoint = state.input.endpoints[request_description.endpoint_id];
+            let ref video = state.input.videos[request_description.video_id];
+
+            endpoint.cache_connections
+                .iter()
+                .filter_map(|&(cache_id, cache_latency)| if video.size > state.input.cache_size {
+                    None
+                } else {
+                    Some((cache_id,
+                          request_description.video_id,
+                          ((endpoint.latency - cache_latency) * request_description.amount) / input.videos[request_description.video_id].size))
+                })
+                .collect::<Vec<(Id, Id, u32)>>()
+        })
+        .collect();
+
+    let mut cache_latency_scores = HashMap::new();
+    for request_description_score in request_description_scores {
+        for (cache_id, video_id, score) in request_description_score {
+            let cache_latency_score = cache_latency_scores.entry((cache_id, video_id))
+                .or_insert(0);
+            *cache_latency_score += score;
+        }
+    }
+
+    let mut cache_latency_scores: Vec<(Id, Id, u32)> = cache_latency_scores.iter()
+        .map(|(&(cache_id, video_id), &score)| (cache_id, video_id, score))
+        .collect();
+
+    cache_latency_scores.sort_by(|a, b| b.2.cmp(&a.2));
+
+    while let Some(&(cache_id, video_id, _)) =
+        {
+            cache_latency_scores.par_iter().find_any(|&&(cache_id, video_id, _)| {
+                state.input.cache_size as i32 - state.cache_usage(cache_id) as i32 >=
+                input.videos[video_id].size as i32 && !state.cached_videos[cache_id].contains(&video_id)
+            })
+        } {
+        state.insert_video_in_cache(cache_id, video_id);
+        pb.add(input.videos[video_id].size as u64 * 1_048_576);
+        // Here the scores needs to be updated accordingly
+        // What has been affected? The cache_id -> endpoint -> request_descriptions -> that has that video -> 
+        //      set all to zero should essentially have the same affect as before with is_caching for an endpoint?
+        //      actually calculate the new scores now that it is being cached by one of the endpoints
+        //          could be too expensive?
+        //              some kind of traceback?
+        //              Draw this and I'll figure it out...
+    }
 
     writeln!(stderr(),
-             "\nTime: {}s\nScore: {}",
+             "\nTime: {}s\nScore: {}\nScore Unadjusted: {}",
              Instant::now().duration_since(now).as_secs(),
-             state.score())
+             state.score().1,
+             state.score().0)
         .unwrap();
-    print!("{}", state.output())
+    print!("{}", state.output());
 }
